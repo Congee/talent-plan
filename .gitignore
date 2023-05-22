@@ -39,3 +39,4 @@ go.work
 
 # Misc
 *.log
+.direnv/
