@@ -1,0 +1,3 @@
+[submodule "courses/rust/projects/project-1/third_party/monoio"]
+	path = courses/rust/projects/project-1/third_party/monoio
+	url = git@github.com:bytedance/monoio.git
