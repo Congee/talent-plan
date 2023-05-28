@@ -4,8 +4,9 @@ use std::hash::Hasher;
 
 pub static NUM_THREADS: Lazy<usize> = Lazy::new(|| std::cmp::max(1, num_cpus::get_physical() - 1));
 
+#[allow(dead_code)]
 pub fn thread_of(key: &[u8]) -> u64 {
-    let hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
     hasher.finish() % *&*NUM_THREADS as u64
 }
