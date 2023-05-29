@@ -1,8 +1,16 @@
 use thiserror::Error;
+use flume;
 
 /// Erro type for kvs
 #[derive(Error, Debug)]
 pub enum KvsError {
+    /// Serde Error
+    #[error("error de/serializing")]
+    SerdeError(#[from] serde_json::Error),
+
+    #[error("flume::RecvError")]
+    RecvError(#[from] flume::RecvError),
+
     /// Not found
     #[error("key not found")]
     KeyNotFound,

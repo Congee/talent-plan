@@ -132,18 +132,18 @@ impl KvStore {
     // in progress?
     // }
 
-    async fn try_compact(&mut self) {
-
-        let fut = monoio::spawn(async {
-            // if self.compacting.load(Ordering::SeqCst) {
-            //     return;
-            // }
-            // self.compacting.store(true, Ordering::SeqCst);
-            // self.compacting.store(false, Ordering::SeqCst);
-
-            self.compact(0);
-        });
-    }
+    // async fn try_compact(&mut self) {
+    //
+    //     let fut = monoio::spawn(async {
+    //         // if self.compacting.load(Ordering::SeqCst) {
+    //         //     return;
+    //         // }
+    //         // self.compacting.store(true, Ordering::SeqCst);
+    //         // self.compacting.store(false, Ordering::SeqCst);
+    //
+    //         self.compact(0);
+    //     });
+    // }
 
     async fn compact(&mut self, file_id: u64) -> std::io::Result<()> {
         // load everything in memory.
@@ -272,7 +272,7 @@ impl KvStore {
             active_fid: file_id_to_write,
             files,
             map,
-            compacting: false,
+            compacting: AtomicBool::new(false),
         })
     }
 }
