@@ -6,7 +6,8 @@ use std::process::Command;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
-use monoio;
+use tokio_uring;
+use tokio;
 
 // `kvs` with no args should exit with a non-zero code.
 #[test]
@@ -63,37 +64,40 @@ fn cli_set() {
         .stdout(is_empty());
 }
 
-#[monoio::test(enable_timer = true)]
-async fn cli_get_stored() -> Result<()> {
+#[test]
+fn cli_get_stored() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     dbg!(temp_dir.path());
 
-    let mut store = KvStore::open(temp_dir.path()).await?;
-    store.set("key1".into(), "value1".into()).await?;
-    store.set("key2".into(), "value2".into()).await?;
-    drop(store);
+    tokio_uring::start(async move {
+        let mut store = KvStore::open(temp_dir.path()).await.unwrap();
+        store.set("key1".into(), "value1".into()).await.unwrap();
+        store.set("key2".into(), "value2".into()).await.unwrap();
+        drop(store);
 
-    Command::cargo_bin("kvs")
-        .unwrap()
-        .args(&["get", "key1"])
-        .current_dir(&temp_dir)
-        .assert()
-        .success()
-        .stdout(eq("value1").trim());
+        Command::cargo_bin("kvs")
+            .unwrap()
+            .args(&["get", "key1"])
+            .current_dir(&temp_dir)
+            .assert()
+            .success()
+            .stdout(eq("value1").trim());
 
-    Command::cargo_bin("kvs")
-        .unwrap()
-        .args(&["get", "key2"])
-        .current_dir(&temp_dir)
-        .assert()
-        .success()
-        .stdout(eq("value2").trim());
+        Command::cargo_bin("kvs")
+            .unwrap()
+            .args(&["get", "key2"])
+            .current_dir(&temp_dir)
+            .assert()
+            .success()
+            .stdout(eq("value2").trim());
+
+    });
 
     Ok(())
 }
 
 // `kvs rm <KEY>` should print nothing and exit with zero.
-#[monoio::test(enable_timer = true)]
+#[tokio::test]
 async fn cli_rm_stored() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
 
@@ -181,7 +185,7 @@ fn cli_invalid_subcommand() {
 }
 
 // Should get previously stored value.
-#[monoio::test(enable_timer = true)]
+#[tokio::test]
 async fn get_stored_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path()).await?;
@@ -202,7 +206,7 @@ async fn get_stored_value() -> Result<()> {
 }
 
 // Should overwrite existent value.
-#[monoio::test]
+#[tokio::test]
 async fn overwrite_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path()).await?;
@@ -223,7 +227,7 @@ async fn overwrite_value() -> Result<()> {
 }
 
 // Should get `None` when getting a non-existent key.
-#[monoio::test]
+#[tokio::test]
 async fn get_non_existent_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path()).await?;
@@ -239,7 +243,7 @@ async fn get_non_existent_value() -> Result<()> {
     Ok(())
 }
 
-#[monoio::test]
+#[tokio::test]
 async fn remove_non_existent_key() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path()).await?;
@@ -247,7 +251,7 @@ async fn remove_non_existent_key() -> Result<()> {
     Ok(())
 }
 
-#[monoio::test]
+#[tokio::test]
 async fn remove_key() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path()).await?;
@@ -259,7 +263,7 @@ async fn remove_key() -> Result<()> {
 
 // Insert data until total size of the directory decreases.
 // Test data correctness after compaction.
-#[monoio::test]
+#[tokio::test]
 #[ignore]
 async fn compaction() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");

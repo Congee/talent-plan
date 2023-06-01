@@ -6,8 +6,7 @@ use std::pin::{pin, Pin};
 use std::task::Context;
 use std::{async_iter::AsyncIterator, task::Poll};
 
-use crate::fs::{File};
-use monoio::buf::VecBuf;
+use crate::fs::File;
 
 use chrono::{DateTime, TimeZone as _, Utc};
 use crc32fast;
@@ -30,7 +29,7 @@ impl Command {
     pub async fn to_file(self, file: &mut File) -> std::io::Result<usize> {
         // | crc | write/delete | timestamp | ksz | value_sz | key | value |
         // | u32 | u8           | i64       | usz | usz      | _   | _     |
-        let iovec = match self {
+        let bufs = match self {
             Command::Write {
                 key,
                 value,
@@ -73,7 +72,7 @@ impl Command {
             }
         };
 
-        file.append(VecBuf::from(iovec)).await
+        file.append(bufs).await
     }
 }
 
@@ -95,14 +94,14 @@ impl Index {
         hasher.update(&self.timestamp.timestamp_nanos().to_le_bytes());
         let _crc32 = hasher.finalize();
 
-        let iovec = vec![
+        let bufs = vec![
             Vec::from(self.file_id.to_le_bytes()),
             Vec::from(self.pos.to_le_bytes()),
             Vec::from(self.len.to_le_bytes()),
             Vec::from(self.timestamp.timestamp_nanos().to_le_bytes()),
         ];
 
-        writer.append(VecBuf::from(iovec)).await
+        writer.append(bufs).await
     }
 }
 
@@ -130,9 +129,9 @@ impl<'a> StreamReader<'a, Command> {
     pub(crate) async fn read_entry(&mut self) -> std::io::Result<Option<Command>> {
         // | crc | write/delete | timestamp | ksz | value_sz | key | value |
         // | u32 | u8           | i64       | usz | usz      | _   | _     |
-        let vecbuf = VecBuf::from(vec![vec![0u8; 4], vec![0u8; 1], vec![0u8; 8], vec![0u8; 8]]);
+        let bufs = vec![vec![0u8; 4], vec![0u8; 1], vec![0u8; 8], vec![0u8; 8]];
         let mut pos = self.cursor;
-        let (result, buf) = self.file.preadv_exact(vecbuf, pos).await;
+        let (result, buf) = self.file.readv_at_all(bufs, Some(pos)).await;
         if let Err(err) = result {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
                 return Ok(None);
@@ -149,17 +148,17 @@ impl<'a> StreamReader<'a, Command> {
         pos += 4 + 1 + 8 + 8;
 
         if is_write {
-            let (result, vszbuf) = self.file.pread_exact(Box::new([0; 8]), pos).await;
+            let (result, vszbuf) = self.file.inner().read_exact_at(vec![0; 8], pos).await;
             result?;
-            let vsz = u64::from_le_bytes(Box::into_inner(vszbuf));
+            let vsz = u64::from_le_bytes(TryInto::<[u8; 8]>::try_into(vszbuf).unwrap());
             pos += 8;
 
-            let vecbuf = VecBuf::from(vec![vec![0u8; ksz as _], vec![0u8; vsz as _]]);
-            let (result, vecbuf) = self.file.preadv_exact(vecbuf, pos).await;
+            let bufs = vec![vec![0u8; ksz as _], vec![0u8; vsz as _]];
+            let (result, bufs) = self.file.readv_at_all(bufs, Some(pos)).await;
             result?;
 
             self.cursor = pos + (ksz + vsz) as u64;
-            let mut iovec: Vec<Vec<u8>> = vecbuf.into();
+            let mut iovec: Vec<Vec<u8>> = bufs.into();
 
             Ok(Some(Command::Write {
                 key: std::mem::replace(&mut iovec[0], Vec::new()),
@@ -168,7 +167,7 @@ impl<'a> StreamReader<'a, Command> {
             }))
         } else {
             let key = vec![0; ksz as _];
-            let (result, key) = self.file.pread_exact(key, pos).await;
+            let (result, key) = self.file.inner().read_exact_at(key, pos).await;
             result?;
             self.cursor = pos + ksz as u64;
 
@@ -177,7 +176,7 @@ impl<'a> StreamReader<'a, Command> {
     }
 }
 
-impl<'a,> AsyncIterator for StreamReader<'a, Command> {
+impl<'a> AsyncIterator for StreamReader<'a, Command> {
     type Item = std::io::Result<Command>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

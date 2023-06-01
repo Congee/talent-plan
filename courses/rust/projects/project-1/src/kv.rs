@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use std::os::unix::prelude::OpenOptionsExt;
-use std::sync::atomic::{Ordering, AtomicBool};
+// use std::sync::atomic::{Ordering, AtomicBool};
 use std::sync::RwLock;
 use std::{collections::HashMap, path::PathBuf};
 
@@ -12,9 +12,8 @@ use crate::{fs::File, xchg::StreamReader, Result};
 
 use chrono::Utc;
 use crossbeam_skiplist::SkipMap;
-use futures;
 use libc;
-use monoio::fs::OpenOptions;
+use tokio_uring::fs::OpenOptions;
 
 #[cfg(target_os = "linux")]
 const O_DIRECT: libc::c_int = libc::O_DIRECT & 0; // FIXME: ailgnment
@@ -30,7 +29,7 @@ pub struct KvStore {
     active_fid: u64,
     files: HashMap<u64, File>,
     map: SkipMap<Vec<u8>, std::sync::RwLock<Index>>,
-    compacting: AtomicBool,
+    // compacting: AtomicBool,
 }
 
 // TODO: bloom filter -> cache -> ptr map -> disk (O_DIRECT)
@@ -87,7 +86,7 @@ impl KvStore {
             })
             .map(|(file, len, pos)| async move {
                 let buf = vec![0u8; len as usize];
-                let (res, buf) = file.pread_exact(buf, pos).await;
+                let (res, buf) = file.inner().read_exact_at(buf, pos).await;
                 res.map(|_| buf)
             });
 
@@ -155,7 +154,7 @@ impl KvStore {
         let mut map = SkipMap::<Vec<u8>, RwLock<Index>>::new();
         let file = &self.files[&file_id];
         Self::load_file(file, &mut map).await?;
-        map.iter().map(|entry| {});
+        // map.iter().map(|entry| {});
 
         Ok(())
     }
@@ -272,7 +271,7 @@ impl KvStore {
             active_fid: file_id_to_write,
             files,
             map,
-            compacting: AtomicBool::new(false),
+            // compacting: AtomicBool::new(false),
         })
     }
 }

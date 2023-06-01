@@ -5,12 +5,16 @@
 #![feature(sync_unsafe_cell)]
 //! A simple key/value store.
 
-pub use error::{Result, KvsError};
+pub use error::{KvsError, Result};
 pub use kv::KvStore;
+pub use server::{run_store, run_server};
 
+pub mod client;
 pub mod error;
-pub mod kv;
-pub mod xchg;
 pub mod fs;
+pub mod kv;
+pub mod readv_all;
+pub mod server;
+pub mod xchg;
 
 mod util;
