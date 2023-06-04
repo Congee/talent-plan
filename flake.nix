@@ -18,8 +18,8 @@
     in {
       devShell = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
-          rustc cargo pkgconfig clippy rust-analyzer
-          mongodb-tools  # bsondump
+          rustc cargo pkgconfig clippy rust-analyzer buf-language-server
+          protobuf
         ];
         buildInputs = with pkgs; [
           openssl.dev

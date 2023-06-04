@@ -1,27 +1,48 @@
 #![allow(missing_docs)]
 
-use std::convert::TryInto;
 use std::future::Future;
 use std::pin::{pin, Pin};
 use std::task::Context;
 use std::{async_iter::AsyncIterator, task::Poll};
 
 use crate::fs::File;
+use monoio::buf::VecBuf;
 
+use bytes::{Buf, Bytes, BytesMut};
 use chrono::{DateTime, TimeZone as _, Utc};
 use crc32fast;
 
 /// | crc | write/delete | timestamp | ksz | key | val_sz | value |
 pub enum Command {
     Write {
-        key: Vec<u8>,
-        value: Vec<u8>,
+        key: Bytes,
+        value: Bytes,
         timestamp: DateTime<Utc>,
     },
     Delete {
-        key: Vec<u8>,
+        key: Bytes,
         timestamp: DateTime<Utc>,
     },
+}
+
+impl PartialEq for Command {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+
+impl PartialOrd for Command {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Command::Write { key: lhs, .. }, Command::Write { key: rhs, .. }) => {
+                lhs.partial_cmp(rhs)
+            }
+            (Command::Delete { key: lhs, .. }, Command::Delete { key: rhs, .. }) => {
+                lhs.partial_cmp(rhs)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Command {
@@ -29,7 +50,7 @@ impl Command {
     pub async fn to_file(self, file: &mut File) -> std::io::Result<usize> {
         // | crc | write/delete | timestamp | ksz | value_sz | key | value |
         // | u32 | u8           | i64       | usz | usz      | _   | _     |
-        let bufs = match self {
+        let iovec = match self {
             Command::Write {
                 key,
                 value,
@@ -45,11 +66,11 @@ impl Command {
                 let crc32 = hasher.finalize();
 
                 vec![
-                    Vec::from(crc32.to_le_bytes()),
-                    Vec::from((0 as u8).to_le_bytes()),
-                    Vec::from(timestamp.timestamp_nanos().to_le_bytes()),
-                    Vec::from((key.len() as u64).to_le_bytes()),
-                    Vec::from((value.len() as u64).to_le_bytes()),
+                    Bytes::copy_from_slice(&crc32.to_le_bytes()),
+                    Bytes::copy_from_slice(&(0 as u8).to_le_bytes()),
+                    Bytes::copy_from_slice(&timestamp.timestamp_nanos().to_le_bytes()),
+                    Bytes::copy_from_slice(&(key.len() as u64).to_le_bytes()),
+                    Bytes::copy_from_slice(&(value.len() as u64).to_le_bytes()),
                     key,
                     value,
                 ]
@@ -63,16 +84,16 @@ impl Command {
                 let crc32 = hasher.finalize();
 
                 vec![
-                    Vec::from(crc32.to_le_bytes()),
-                    Vec::from((1 as u8).to_le_bytes()),
-                    Vec::from(timestamp.timestamp_nanos().to_le_bytes()),
-                    Vec::from((key.len() as u64).to_le_bytes()),
+                    Bytes::copy_from_slice(&crc32.to_le_bytes()),
+                    Bytes::copy_from_slice(&(1 as u8).to_le_bytes()),
+                    Bytes::copy_from_slice(&timestamp.timestamp_nanos().to_le_bytes()),
+                    Bytes::copy_from_slice(&(key.len() as u64).to_le_bytes()),
                     key,
                 ]
             }
         };
 
-        file.append(bufs).await
+        file.append(VecBuf::from(iovec)).await
     }
 }
 
@@ -94,19 +115,19 @@ impl Index {
         hasher.update(&self.timestamp.timestamp_nanos().to_le_bytes());
         let _crc32 = hasher.finalize();
 
-        let bufs = vec![
+        let iovec = vec![
             Vec::from(self.file_id.to_le_bytes()),
             Vec::from(self.pos.to_le_bytes()),
             Vec::from(self.len.to_le_bytes()),
             Vec::from(self.timestamp.timestamp_nanos().to_le_bytes()),
         ];
 
-        writer.append(bufs).await
+        writer.append(VecBuf::from(iovec)).await
     }
 }
 
 pub struct StreamReader<'a, T> {
-    cursor: u64,
+    pub cursor: u64,
     file: &'a File, // TODO: StreamReader shall be buffered
     __phony: std::marker::PhantomData<T>,
 }
@@ -119,59 +140,68 @@ impl<'a, T> StreamReader<'a, T> {
             __phony: Default::default(),
         }
     }
-
-    pub fn cursor(&self) -> u64 {
-        self.cursor
-    }
 }
 
 impl<'a> StreamReader<'a, Command> {
     pub(crate) async fn read_entry(&mut self) -> std::io::Result<Option<Command>> {
         // | crc | write/delete | timestamp | ksz | value_sz | key | value |
         // | u32 | u8           | i64       | usz | usz      | _   | _     |
-        let bufs = vec![vec![0u8; 4], vec![0u8; 1], vec![0u8; 8], vec![0u8; 8]];
+        let vecbuf = VecBuf::from(vec![
+            BytesMut::with_capacity(4),
+            BytesMut::with_capacity(1),
+            BytesMut::with_capacity(8),
+            BytesMut::with_capacity(8),
+        ]);
         let mut pos = self.cursor;
-        let (result, buf) = self.file.readv_at_all(bufs, Some(pos)).await;
-        if let Err(err) = result {
+        let (result, buf) = self.file.preadv_exact(vecbuf, pos).await;
+        if let Err(err) = &result {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
                 return Ok(None);
+            } else {
+                panic!()
             }
         }
 
-        let iovec: Vec<Vec<u8>> = buf.into();
-        let _crc32 = u32::from_le_bytes(TryInto::<[u8; 4]>::try_into(iovec[0].clone()).unwrap());
+        let mut iovec: Vec<BytesMut> = buf.into();
+        let _crc32 = iovec[0].get_u32_le();
         let is_write = iovec[1][0] == 0;
-        let ts = i64::from_le_bytes(TryInto::<[u8; 8]>::try_into(iovec[2].clone()).unwrap());
+        let ts = iovec[2].get_i64_le();
         let timestamp = Utc.timestamp_nanos(ts);
-        let ksz = u64::from_le_bytes(TryInto::<[u8; 8]>::try_into(iovec[3].clone()).unwrap());
+        let ksz = iovec[3].get_u64_le();
 
         pos += 4 + 1 + 8 + 8;
 
         if is_write {
-            let (result, vszbuf) = self.file.inner().read_exact_at(vec![0; 8], pos).await;
+            let (result, vszbuf) = self.file.pread_exact(Box::new([0; 8]), pos).await;
             result?;
-            let vsz = u64::from_le_bytes(TryInto::<[u8; 8]>::try_into(vszbuf).unwrap());
+            let vsz = u64::from_le_bytes(Box::into_inner(vszbuf));
             pos += 8;
 
-            let bufs = vec![vec![0u8; ksz as _], vec![0u8; vsz as _]];
-            let (result, bufs) = self.file.readv_at_all(bufs, Some(pos)).await;
+            let vecbuf = VecBuf::from(vec![
+                BytesMut::with_capacity(ksz as _),
+                BytesMut::with_capacity(vsz as _),
+            ]);
+            let (result, vecbuf) = self.file.preadv_exact(vecbuf, pos).await;
             result?;
 
             self.cursor = pos + (ksz + vsz) as u64;
-            let mut iovec: Vec<Vec<u8>> = bufs.into();
+            let iovec: Vec<BytesMut> = vecbuf.into();
 
             Ok(Some(Command::Write {
-                key: std::mem::replace(&mut iovec[0], Vec::new()),
-                value: std::mem::replace(&mut iovec[1], Vec::new()),
+                key: iovec[0].clone().freeze(),
+                value: iovec[1].clone().freeze(),
                 timestamp,
             }))
         } else {
-            let key = vec![0; ksz as _];
-            let (result, key) = self.file.inner().read_exact_at(key, pos).await;
+            let key = BytesMut::with_capacity(ksz as _);
+            let (result, key) = self.file.pread_exact(key, pos).await;
             result?;
             self.cursor = pos + ksz as u64;
 
-            Ok(Some(Command::Delete { key, timestamp }))
+            Ok(Some(Command::Delete {
+                key: key.freeze(),
+                timestamp,
+            }))
         }
     }
 }

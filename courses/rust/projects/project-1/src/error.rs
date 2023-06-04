@@ -9,8 +9,8 @@ pub enum KvsError {
     #[error("error de/serializing")]
     SerdeError(#[from] serde_json::Error),
 
-    #[error("flume::RecvError")]
-    RecvError(#[from] flume::RecvError),
+    #[error("flume error")]
+    FlumeError(String),
 
     /// Not found
     #[error("key not found")]
@@ -42,10 +42,29 @@ impl Serialize for KvsError {
 }
 
 impl<'de> Deserialize<'de> for KvsError {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    fn deserialize<D>(_: D) -> core::result::Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
         Ok(KvsError::Whatever(anyhow::anyhow!("unreachable")))
     }
 }
+
+impl From<flume::SendError<crate::kv::StoreRep>> for KvsError  {
+    fn from(value: flume::SendError<crate::kv::StoreRep>) -> Self {
+        KvsError::FlumeError(value.to_string())
+    }
+}
+
+impl From<flume::RecvError> for KvsError  {
+    fn from(value: flume::RecvError) -> Self {
+        KvsError::FlumeError(value.to_string())
+    }
+}
+
+impl From<flume::SendError<crate::kv::StoreReq>> for KvsError  {
+    fn from(value: flume::SendError<crate::kv::StoreReq>) -> Self {
+        KvsError::FlumeError(value.to_string())
+    }
+}
+

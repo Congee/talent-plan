@@ -22,12 +22,18 @@ serde_json = "1.0.96"
 tempfile = "3.4.0"
 thiserror = "1.0.40"
 walkdir = "2.3.3"
-tokio-uring = { path = "third_party/tokio-uring", featuers = ["bytes"] }
 tokio = { version = "1.28.2", features = ["rt-multi-thread", "test-util", "macros"] }
-tarpc = { version = "0.33.0", features = ["serde", "tokio-serde", "unix", "serde-transport-bincode", "full"] }
 pin-project = "1.1.0"
-glommio = { version = "0.8.0", features = ["debugging"] }
+monoio = { path = "third_party/monoio/monoio", features = ["macros"]}
+tonic = { git = "https://github.com/Congee/tonic.git" }
+prost = "0.11.9"
+hyper = "0.14.26"
+tower = "0.4.13"
 
 [dev-dependencies]
 assert_cmd = "2.0.10"
 predicates = "3.0.2"
+
+[build-dependencies]
+tonic-build = "0.9"
+prost-build = "*"
